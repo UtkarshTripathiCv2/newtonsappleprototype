@@ -1,0 +1,94 @@
+#include <Wire.h>
+#include <MPU6050.h>
+
+#define sensor_pin 13   // TTP touch sensor
+#define led_pin 12      // LED for status
+
+MPU6050 mpu;
+
+unsigned long dropStartTime = 0;
+unsigned long dropEndTime = 0;
+bool isFalling = false;
+bool active = false;
+
+float accMagnitude = 0;
+const float g = 9.81;  // Gravity constant
+
+void setup() {
+  pinMode(sensor_pin, INPUT);
+  pinMode(led_pin, OUTPUT);
+  Serial.begin(9600);
+
+  Wire.begin();
+  mpu.initialize();
+
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+    while (1);
+  }
+
+  Serial.println("MPU6050 ready!");
+}
+
+void loop() {
+  int sensorState = digitalRead(sensor_pin);
+
+  if (sensorState == LOW) {
+    // Finger removed — device armed
+    if (!active) {
+      Serial.println("Device armed. Ready to detect drop...");
+      active = true;
+      isFalling = false;
+      dropStartTime = 0;
+      dropEndTime = 0;
+      digitalWrite(led_pin, HIGH);
+    }
+
+    int16_t ax, ay, az;
+    mpu.getAcceleration(&ax, &ay, &az);
+
+    // Convert to Gs and calculate total acceleration magnitude
+    float ax_g = ax / 16384.0;
+    float ay_g = ay / 16384.0;
+    float az_g = az / 16384.0;
+    accMagnitude = sqrt(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
+
+    // Detect free fall: ~0g means falling
+    if (accMagnitude < 0.3 && !isFalling) {
+      dropStartTime = millis();
+      isFalling = true;
+      Serial.println("Free fall detected...");
+    }
+
+    // Detect impact: >1.2g means it hit something
+    if (accMagnitude > 1.2 && isFalling) {
+      dropEndTime = millis();
+      isFalling = false;
+
+      float fallTimeSec = (dropEndTime - dropStartTime) / 1000.0;
+      float height = 0.5 * g * fallTimeSec * fallTimeSec;
+
+      Serial.print("Fall Time: ");
+      Serial.print(fallTimeSec, 3);
+      Serial.print(" s\tHeight: ");
+      Serial.print(height, 2);
+      Serial.println(" meters");
+
+      digitalWrite(led_pin, LOW);
+      active = false; // Reset for next run
+    }
+
+  } else {
+    // Finger touching: reset everything
+    if (active || isFalling) {
+      Serial.println("TTP touched. Resetting...");
+      active = false;
+      isFalling = false;
+      dropStartTime = 0;
+      dropEndTime = 0;
+      digitalWrite(led_pin, LOW);
+    }
+  }
+
+  delay(50); // Faster response
+}
